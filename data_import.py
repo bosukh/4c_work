@@ -6,7 +6,6 @@ import os
 import sys
 from datetime import datetime, date, timedelta
 from sqlalchemy import create_engine
-from sqlalchemy.sql import bindparam
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, load_only
 from vizio_models import VizioViewingFact, VizioDemographicDim, VizioLocationDim, \
@@ -77,7 +76,10 @@ class VizioImporter(object):
 
         # Network Table + Load reference csv file
         self.load_networks()
-        self.call_signs_ref = pd.read_csv('./reference/vizio_to_fcc_callsign.csv')
+        #self.call_signs_ref = pd.read_csv('./reference/vizio_to_fcc_callsign.csv')
+        self.call_signs_ref = pd.read_excel('./reference/Inscape_Active_Stations_6_6_17.xlsx')
+        self.call_signs_ref.columns = ['station_type', 'station_dma', 'network_affiliate', 'call_sign', 'station_name']
+        self.call_signs_ref = self.call_signs_ref.drop_duplicates()
 
         # Program Table
         self.load_programs()
@@ -221,32 +223,6 @@ class VizioImporter(object):
         self.times = times
 
 
-    @__db_session
-    def core_insert(self, table_obj, list_of_dict, operation = None):
-        # known to be the quickest implementation at least among salalchemy apis
-        self.session.execute('SET foreign_key_checks=0;')
-        self.session.execute('SET unique_checks=0;')
-        self.session.execute('SET sql_log_bin=0;')
-        self.session.execute('SET autocommit=0;')
-
-        if operation == None:
-            operation = table_obj.__table__.insert()
-        for i in range(len(list_of_dict) / 50000):
-            self.engine.execute(
-                operation,
-                list_of_dict[i*50000:(i+1)*50000]
-            )
-        self.engine.execute(
-            table_obj.__table__.insert(),
-            list_of_dict[(len(list_of_dict) / 50000)*50000:]
-        )
-
-        self.session.execute('SET foreign_key_checks=1;')
-        self.session.execute('SET unique_checks=1;')
-        self.session.execute('SET sql_log_bin=1;')
-        self.session.execute('SET autocommit=1;')
-
-
     def raw_insert(self, table_obj, pd_dataframe):
         # use external shell script to do the insertion.
         def __put_placeholder(pd_df, columns):
@@ -258,8 +234,9 @@ class VizioImporter(object):
         table_cols = [col.key for col in table_obj.__table__.c]
         file_name = '%s_to_insert.csv'%table_name
         __put_placeholder(pd_dataframe, table_cols).to_csv(file_name,
-                                                           index=False,
-                                                           header=False)
+                                                           index = False,
+                                                           header = False,
+                                                           sep = '^')
         os.system(
             './db_import_script.sh {file_name} {table_name}'.format(file_name = file_name,
                                                                     table_name = table_name)
@@ -549,7 +526,10 @@ class VizioImporter(object):
         ].drop_duplicates()
         all_networks = pd.merge(
             all_networks,
-            self.call_signs_ref[['call_sign', 'network_affiliate']],
+            self.call_signs_ref[['call_sign',
+                                 'network_affiliate',
+                                 'station_dma',
+                                 'station_name']],
             on = 'call_sign',
             how ='left'
         )
@@ -708,56 +688,71 @@ class VizioImporter(object):
 
         dat = dat.where(pd.notnull(dat), None)
 
-        a = time()
         self.raw_insert(
             self.Viewing,
             dat.filter(self.ViewingCols)
         )
-        print 'Time to insert %s rows'%str(len(dat)), time() - a
         ### End of VIEWING
 
         self.dat = dat
         self.viewing_data = viewing_data
 
 ### INGNORE ###
-def testing():
-    date_str = '2017-04-02'
-    a = time()
-    for date_str in ['2017-03-01', '2017-04-02', '2017-05-01', '2017-05-17']:
-        file_loc = './data/%s/'%date_str
-        #date_str = '2017-04-03'
+# def testing():
+#     date_str = '2017-04-02'
+#     a = time()
+#     for date_str in ['2017-03-01', '2017-04-02', '2017-05-01', '2017-05-17']:
+#         file_loc = './data/%s/'%date_str
+#         #date_str = '2017-04-03'
+#         year, month, day = [int(x) for x in date_str.split('-')]
+#         b = time()
+#         im = VizioImporter(year, month, day)
+#         print time() - b
+#         files = []
+#         for file_name in os.listdir(file_loc):
+#             if file_name.find('historical.content') != -1:
+#                 files.append(file_name)
+#         files.sort()
+#
+#         for file_name in files:
+#             print '##################### %s ###################'%file_name
+#             b = time()
+#             filepath = file_loc + file_name
+#             im.import_file(filepath)
+#             print time() - b, time() - a
+### INGNORE ###
+
+def import_historical(folder_names):
+    #folder_name is in date string format - YYYY-MM-DD
+    path = '/files2/Vizio/data/s3_download/vizio_unzipped/history/%s/'
+    for date_str in folder_names:
+        file_loc = path%date_str
         year, month, day = [int(x) for x in date_str.split('-')]
-        b = time()
         im = VizioImporter(year, month, day)
-        print time() - b
         files = []
         for file_name in os.listdir(file_loc):
             if file_name.find('historical.content') != -1:
                 files.append(file_name)
         files.sort()
-
-        for file_name in files[:1]:
+        for file_name in files:
             print '##################### %s ###################'%file_name
-            b = time()
             filepath = file_loc + file_name
             im.import_file(filepath)
-            print time() - b, time() - a
-### INGNORE ###
+
 
 def main(year, month, day, filepath):
     importer = VizioImporter(year, month, day)
     importer.import_file(filepath)
 
 if __name__ == '__main__':
-    testing()
-    # Make sure to change config.py file.
-    # if len(sys.argv) != 3:
-    #     print 'filepath and date string argument are required'
-    # else:
-    #     filepath = sys.argv[1]
-    #     date_str = sys.argv[2]
-    #     year, month, day = [int(x) for x in date_str.split('-')]
-    #     main(year, month, day, filepath)
+    Make sure to change config.py file.
+    if len(sys.argv) != 3:
+        print 'filepath and date string argument are required'
+    else:
+        filepath = sys.argv[1]
+        date_str = sys.argv[2]
+        year, month, day = [int(x) for x in date_str.split('-')]
+        main(year, month, day, filepath)
 
 
 #python data_import.py ./data/2017-05-17/historical.content.2017-05-17-07._0000_part_00 2017-05-17

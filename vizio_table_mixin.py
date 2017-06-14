@@ -38,7 +38,8 @@ class VizioNetworkDimMixin():
     id                    = Column(Integer, primary_key=True, autoincrement=True)
     call_sign             = Column(String(20), nullable=False)
     station_id            = Column(Integer, nullable=True) # tms
-    network_name          = Column(String(250), nullable=True)
+    station_dma            = Column(String(128), nullable=True) # dma_name
+    station_name          = Column(String(250), nullable=True)
     network_affiliate     = Column(String(20), nullable=True)
 
 

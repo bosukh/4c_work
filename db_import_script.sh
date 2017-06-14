@@ -15,7 +15,7 @@ SET unique_checks=0;
 SET sql_log_bin=0;
 SET autocommit=0;
 LOAD DATA LOCAL INFILE '$csv_filename' INTO TABLE $db_name
-FIELDS TERMINATED BY ','
+FIELDS TERMINATED BY '^'
 LINES TERMINATED BY '\n';
 COMMIT;
 SET sql_log_bin=1;
