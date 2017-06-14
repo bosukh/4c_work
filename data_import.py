@@ -745,9 +745,24 @@ def main(year, month, day, filepath):
     importer.import_file(filepath)
 
 if __name__ == '__main__':
-    Make sure to change config.py file.
+    # Make sure to change config.py file.
     if len(sys.argv) != 3:
-        print 'filepath and date string argument are required'
+        hist = raw_input('Run historical data import module? (y/n)')
+        if hist.lower() == 'y':
+            filepath = '/files2/Vizio/data/s3_download/vizio_unzipped/history'
+            if len(sys.argv) >= 2:
+                filepath = sys.argv[1]
+            folder_names = []
+            for folder_name in os.listdir(filepath):
+                try:
+                    datetime.strptime(folder_name, '%Y-%m-%d')
+                    folder_names.append(folder_name)
+                except ValueError:
+                    continue
+            folder_names.sort()
+            import_historical(folder_names)
+        else:
+            print 'filepath and date string argument are required'
     else:
         filepath = sys.argv[1]
         date_str = sys.argv[2]
