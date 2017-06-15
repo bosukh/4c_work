@@ -248,7 +248,7 @@ class VizioImporter(object):
                                                     header = False,
                                                     sep = '^')
         os.system(
-            './db_import_script.sh {file_name} {table_name}'.format(file_name = file_name,
+            './vizio_data_import_script.sh {file_name} {table_name}'.format(file_name = file_name,
                                                                     table_name = table_name)
         )
 
@@ -402,7 +402,7 @@ class VizioImporter(object):
             self.activities,
             on = 'household_id',
             how = 'left',
-            indicator=True
+            indicator = True
         )
         # households to insert to activity table and demographics table
         insert_to_activity_demo = in_activity_dim[
@@ -616,9 +616,9 @@ class VizioImporter(object):
             self.programs = pd.concat(
                 [self.programs,
                 all_programs[['id',
-                             'tms_id',
-                             'program_name',
-                             'program_start_time']]],
+                              'tms_id',
+                              'program_name',
+                              'program_start_time']]],
                 ignore_index = True
             )
         ### End of PROGRAMS
@@ -636,6 +636,9 @@ class VizioImporter(object):
                                 temp,
                                 on ='household_id',
                                 how = 'left')
+        if viewing_data.demographic_key.isnull().sum() + (viewing_data.demographic_key == '').sum():
+            viewing_data.to_csv('problem_found.csv', index = False)
+            raise ValueError('Missing demographic_key')
 
         # location_key
         temp = self.locations.rename(index = str,
@@ -758,12 +761,14 @@ def testing():
                 files.append(file_name)
         files.sort()
 
-        for file_name in files[:1]:
+        for file_name in files:
             print '##################### %s ###################'%file_name
             b = time()
             filepath = file_loc + file_name
             im.import_file(filepath)
             print time() - b, time() - a
+            if im.demographics.household_id.isnull().sum() + (im.demographics.household_id == '').sum() > 0:
+                im.demographics.to_csv('demo_problem_%s.csv'%file_name, index=False)
 ### INGNORE ###
 
 def import_historical(folder_names):
@@ -790,7 +795,7 @@ def main(year, month, day, filepath):
 
 if __name__ == '__main__':
     # Make sure to change config.py file.
-    #testing()
+    # testing()
     if len(sys.argv) != 3:
         hist = raw_input('Run historical data import module? (y/n)')
         if hist.lower() == 'y':
