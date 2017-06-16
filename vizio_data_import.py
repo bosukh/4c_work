@@ -15,9 +15,13 @@ from vizio_models import VizioViewingFact, VizioDemographicDim, VizioLocationDim
                          VizioActivityDim
 
 class VizioImporter(object):
+    # 1. Initiate class by VizioImporter(year, month, day)
+    # 2. use import_file mothod to import each file
 
     def __init__(self, year, month, day):
+        # dynamic list of threads that will interact with different tables
         self.threads = []
+
         # SQLalchemy initializtion
         self.config  = Config()
         self.engine  = create_engine("mysql+mysqldb://{user}:{password}@{host}:{port}/{database}".format(**self.config.CONNECTIONS['vizio']))
@@ -68,8 +72,8 @@ class VizioImporter(object):
 
         zipcode_ref = pd.read_csv('./reference/zipcode_with_tz.csv')
         zipcode_ref.zipcode = [
-            "{:05d}".format(int(x)) if pd.isnull(x) == False
-            else x for x in zipcode_ref.zipcode
+            "{:05d}".format(int(x)) if pd.isnull(x) == False else x
+            for x in zipcode_ref.zipcode
         ]
         zipcode_ref.columns = ['zipcode', 'timezone', 'tz_offset']
         zipcode_ref['zipcode_4'] = [x[:4] for x in zipcode_ref.zipcode]
@@ -81,7 +85,11 @@ class VizioImporter(object):
         self.load_networks()
         #self.call_signs_ref = pd.read_csv('./reference/vizio_to_fcc_callsign.csv')
         self.call_signs_ref = pd.read_excel('./reference/Inscape_Active_Stations_6_6_17.xlsx')
-        self.call_signs_ref.columns = ['station_type', 'station_dma', 'network_affiliate', 'call_sign', 'station_name']
+        self.call_signs_ref.columns = ['station_type',
+                                       'station_dma',
+                                       'network_affiliate',
+                                       'call_sign',
+                                       'station_name']
         self.call_signs_ref = self.call_signs_ref.drop_duplicates()
 
         # Program Table
@@ -231,20 +239,12 @@ class VizioImporter(object):
         times.id = times.id.astype(int)
         self.times = times
 
-    def clean_up_temp(self):
-        for file_name in os.listdir('./temp'):
-            os.remove('./temp/' + file_name)
 
     def raw_insert(self, table_obj, pd_df):
-        t = threading.Thread(
-            target=self.raw_insert_,
-            args=(table_obj,
-                  pd_df)
-            )
-        t.start()
-        self.threads.append(t)
+        self.to_thread(self.raw_insert_func, table_obj, pd_df)
 
-    def raw_insert_(self, table_obj, pd_df):
+
+    def raw_insert_func(self, table_obj, pd_df):
         # use external shell script to do the insertion.
         def __put_placeholder(pd_df, columns):
             for col in columns:
@@ -253,39 +253,46 @@ class VizioImporter(object):
             return pd_df[columns]
         table_name = table_obj.__tablename__
         table_cols = [col.key for col in table_obj.__table__.c]
-        file_name = './temp/%s_to_insert_%s'%(table_name, uuid4().hex)
-        __put_placeholder(pd_df, table_cols).to_csv(file_name,
-                                                    index = False,
-                                                    header = False,
-                                                    sep = '^',
-                                                    na_rep = '\N')
-
+        filepath = './temp/%s_to_insert'%table_name
+        unique_filepath = self.to_csv(__put_placeholder(pd_df, table_cols),
+                                       filepath)
         os.system(
-            './vizio_data_import_script.sh {file_name} {table_name}'.format(file_name = file_name,
-                                                                           table_name = table_name)
+            './vizio_data_import_script.sh {file_name} {table_name}'.format(
+                file_name  = unique_filepath,
+                table_name = table_name)
         )
 
+
     def raw_update_activity(self, pd_df):
-        pd_df.to_csv('./temp/activity_to_update',
+        self.to_thread(self.raw_update_activity_func, pd_df)
+
+
+    def raw_update_activity_func(self, pd_df):
+        unique_filepath = self.to_csv(pd_df, './temp/activity_to_update')
+        os.system(
+            './vizio_activity_update_script.sh {file_name}'.format(
+                file_name = unique_filepath)
+        )
+
+
+    def to_thread(self, target, *args):
+        t = threading.Thread(
+                target = target,
+                args = args
+            )
+        t.start()
+        self.threads.append(t)
+
+
+    def to_csv(self, pd_df, filepath):
+        # save locally to be used by shell script to run file upload to database.
+        unique_filepath = filepath + '_' + uuid4().hex
+        pd_df.to_csv(unique_filepath,
                      index = False,
                      header = False,
                      sep = '^',
                      na_rep = '\N')
-        os.system(
-            './vizio_activity_update_script.sh {file_name}'.format(file_name = './temp/activity_to_update')
-        )
-
-    @__db_session
-    def update_activity(self, list_of_dict):
-        for i, row in enumerate(self.session.query(
-                                    self.Activity).filter(
-                                        self.Activity.id.in_(list_of_dict.id))):
-            row.last_active_date = self.today
-            self.session.add(row)
-            self.session.flush()
-            if i % 20000 == 0 and i != 0:
-                self.session.commit()
-        self.session.commit()
+        return unique_filepath
 
 
     def get_datetime(self, datetime_str):
@@ -301,20 +308,34 @@ class VizioImporter(object):
         return self.datetimes[datetime_str]
 
 
+    def clean_up_temp(self):
+        for file_name in os.listdir('./temp'):
+            try:
+                os.remove('./temp/' + file_name)
+            except Exception as e:
+                # most likely permission error, but wouldn't happen if run in home directory
+                pass
+
+
     def extend_viewing_data(self, viewing_data):
         # Split viewing_data to fit into time slots
         # Since Vizio data is reported hourly, only need to concern with
         # the rows that falls on 30 minutes
         for col in ['viewing_start_time', 'viewing_end_time']:
-            temp = pd.DataFrame([[x.hour, x.minute, x.second] for x in viewing_data[col]], columns = ['hr', 'min', 'sec'])
+            temp = pd.DataFrame(
+                [[x.hour, x.minute, x.second] for x in viewing_data[col]],
+                columns = ['hr', 'min', 'sec']
+            )
             viewing_data[col + '_hour']   = temp['hr'].copy()
             viewing_data[col + '_minute'] = temp['min'].copy()
             viewing_data[col + '_second'] = temp['sec'].copy()
+
         condition_1 = (
             (viewing_data.viewing_start_time_minute < 30) &
             (viewing_data.viewing_end_time_minute >= 30)
         )
-        # condition 2 should actually be zero all the time. Vizio reports data in one hour interval
+        # condition 2 should actually be zero all the time.
+        # because Vizio reports data in one hour interval
         condition_2 = (
             (viewing_data.viewing_start_time_minute > 30) &
             (viewing_data.viewing_end_time_hour > viewing_data.viewing_start_time_hour)
@@ -322,12 +343,14 @@ class VizioImporter(object):
         condition_3 = (condition_1 == False) & (condition_2 == False)
 
         extended_viewing_data = pd.DataFrame(columns = viewing_data.columns)
+        # ones that do not fall in 30 min clock, no need to split, just add.
         extended_viewing_data = pd.concat(
             [extended_viewing_data,
              viewing_data[condition_3]],
             ignore_index=True
         )
 
+        # Ones that need to be splitted
         viewing_data['temp_end'] = viewing_data['viewing_start_time'].copy()
         temp = viewing_data[condition_1].reset_index(drop = True).copy()
         temp['temp_end'] = (
@@ -341,6 +364,7 @@ class VizioImporter(object):
         extended_viewing_data = pd.concat([extended_viewing_data, temp],
                                           ignore_index=True)
 
+        # Adjust offset
         temp['program_time_at_start'] = temp['program_time_at_start']  + pd.Series([
             x.seconds * 1000 for x in (temp['viewing_end_time']
                                        - temp['viewing_start_time'])
@@ -377,15 +401,16 @@ class VizioImporter(object):
         ]
         return extended_viewing_data
 
+
     def import_file(self, filepath):
-        aa = time()
+        # reset threads list
         self.threads = []
 
         ### File Import
-        a = time()
         if not os.path.isfile(filepath):
             raise IOError('%s - not found.'%filepath)
 
+        # columns given in the Vizio data
         columns = [
             'household_id',
             'zipcode',
@@ -411,10 +436,8 @@ class VizioImporter(object):
         for col in ['program_start_time', 'viewing_start_time', 'viewing_end_time']:
             viewing_data[col] = pd.to_datetime(viewing_data[col])
         ### End of File Import
-        print time() - a, 'File Import'
 
         ### ACTIVITY & DEMOGRAPHICS
-        aaa = time()
         all_demographics = pd.DataFrame(viewing_data.household_id.unique(),
                                         columns = ['household_id'])
         in_activity_dim = pd.merge(
@@ -436,14 +459,12 @@ class VizioImporter(object):
         insert_to_demo = update_activity.loc[
             update_activity.id.isin(self.demographics.id) == False
         ].copy()
-        #insert_to_demo = insert_to_demo.loc[insert_to_demo.id.isnull()==False,]
         # households to update in activity table
         update_activity = self.activities.loc[
             (self.activities.id.isin(update_activity.id)) & \
             (self.activities.last_active_date != self.today)
         ].copy()
-        print time() - a, 'partitioning activity and DEMO'
-        b = time()
+
         if len(insert_to_activity_demo) > 0:
             # if household_id IS NOT found in BOTH Activity_Dim table and Demographic_Dim_{month}
             start_idx = 1
@@ -452,10 +473,8 @@ class VizioImporter(object):
             insert_to_activity_demo['last_active_date'] = [
                 self.today for _ in range(len(insert_to_activity_demo))
             ]
-            insert_to_activity_demo['id'] = [
-                start_idx + i for i in range(len(insert_to_activity_demo))
-            ]
-            insert_to_activity_demo['id'] = insert_to_activity_demo['id'].astype(int)
+            insert_to_activity_demo['id'] = range(start_idx,
+                                                  start_idx + len(insert_to_activity_demo))
             self.raw_insert(
                 self.Activity,
                 insert_to_activity_demo.filter(self.ActivityCols)
@@ -478,13 +497,12 @@ class VizioImporter(object):
                 insert_to_activity_demo[['id',
                                          'household_id']]
             )
-        print time() - b, 'time to insert activity and demo'
-        b = time()
+
         if len(insert_to_demo) > 0:
             # if household_id IS found in Activity_Dim table, but NOT in Demographic_Dim_{month}
             insert_to_demo = insert_to_demo.reset_index(drop=True)
             insert_to_demo.id = insert_to_demo.id.astype(int)
-            insert_to_demo = insert_to_demo.sort_values('id')
+            #insert_to_demo = insert_to_demo.sort_values('id')
             self.raw_insert(
                 self.Demographic,
                 insert_to_demo[['id',
@@ -496,59 +514,18 @@ class VizioImporter(object):
                                  'household_id']]],
                 ignore_index = True
             )
-        print time() - b, 'time to insert demo only'
-        b = time()
+
         if len(update_activity) > 0:
             # if household_id IS found in BOTH Activity_Dim table and Demographic_Dim_{month}
-            # Assuming that the current time inmport is the most recent data available.
+            # Assuming that the current import is the most recent data available.
             update_activity['last_active_date'] = [
                 self.today for _ in range(len(update_activity))
             ]
-            t = threading.Thread(
-                target=self.raw_update_activity,
-                args=(update_activity[['id', 'last_active_date']],)
-                )
-            t.start()
-            self.threads.append(t)
-        print time() - b, 'time to update activity'
+            self.raw_update_activity(update_activity[['id', 'last_active_date']])
         ### End of ACTIVITY & DEMOGRAPHICS
-        print time() - aaa, 'ACTIVITY & DEMOGRAPHICS'
 
-        ################################################
-        # for thread in self.threads:
-        #     thread.join()
-        # def export_prob(idx):
-        #     self.in_activity_dim = in_activity_dim
-        #     self.insert_to_activity_demo = insert_to_activity_demo
-        #     self.update_activity = update_activity
-        #     self.insert_to_demo = insert_to_demo
-        #     self.all_demographics = all_demographics
-        #
-        #     in_activity_dim.to_csv('in_activity_dim%s.csv'%str(idx), index=False)
-        #     insert_to_activity_demo.to_csv('insert_to_activity_demo%s.csv'%str(idx), index=False)
-        #     update_activity.to_csv('update_activity%s.csv'%str(idx), index=False)
-        #     insert_to_demo.to_csv('insert_to_demo%s.csv'%str(idx), index=False)
-        #     all_demographics.to_csv('all_demographics%s.csv'%str(idx), index=False)
-        #     self.demographics.to_csv('demographics%s.csv'%str(idx), index=False)
-        # raise_error = 0
-        # if (self.demographics.household_id == '').sum() + self.demographics.household_id.isnull().sum():
-        #     export_prob(0)
-        #     raise_error = 1
-        # if self.demographics.id.isnull().sum():
-        #     export_prob(1)
-        #     raise_error = 1
-        # self.load_demographics()
-        # if (self.demographics.household_id == '').sum() + self.demographics.household_id.isnull().sum():
-        #     export_prob(2)
-        #     raise_error = 1
-        #
-        # if raise_error:
-        #     raise ValueError
-        # return
-        ################################################
 
         ### LOCATIONS
-        aaa = time()
         loc_cols = ['zipcode',
                     'dma']
         temp = pd.merge(viewing_data[loc_cols],
@@ -591,7 +568,7 @@ class VizioImporter(object):
             start_idx = 1
             if len(self.locations):
                 start_idx = int(self.locations.id.max() + 1)
-            all_locations['id'] = [start_idx + i for i in range(len(all_locations))]
+            all_locations['id'] = range(start_idx, start_idx + len(all_locations))
             self.raw_insert(
                 self.Location,
                 all_locations[self.LocationCols]
@@ -603,10 +580,8 @@ class VizioImporter(object):
                                 'dma']]]
             )
         ### End of LOCATIONS
-        print time() - aaa, 'LOCATIONS'
 
         ### NETWORK
-        a = time()
         all_networks = viewing_data.loc[
             viewing_data.call_sign.isin(self.networks.call_sign.unique()) == False,
             ['call_sign']
@@ -628,7 +603,7 @@ class VizioImporter(object):
             start_idx = 1
             if len(self.networks):
                 start_idx = int(self.networks.id.max() + 1)
-            all_networks['id'] = [start_idx + i for i in range(len(all_networks))]
+            all_networks['id'] = range(start_idx, start_idx + len(all_networks))
             self.raw_insert(
                 self.Network,
                 all_networks.filter(self.NetworkCols)
@@ -639,11 +614,8 @@ class VizioImporter(object):
                                'call_sign']]]
             )
         ### End of NETWORKS
-        print time() - a, 'NETWORKS'
-
 
         ### PROGRAMS
-        a = time()
         program_cols = [
             'tms_id',
             'program_name',
@@ -665,7 +637,7 @@ class VizioImporter(object):
             start_idx = 1
             if len(self.programs):
                 start_idx = int(self.programs.id.max() + 1)
-            all_programs['id'] = [start_idx + i for i in range(len(all_programs))]
+            all_programs['id'] = range(start_idx, start_idx + len(all_programs))
             self.raw_insert(
                 self.Program,
                 all_programs.filter(self.ProgramCols)
@@ -679,13 +651,8 @@ class VizioImporter(object):
                 ignore_index = True
             )
         ### End of PROGRAMS
-        print time() - a, 'PROGRAMS'
-
 
         ## Merge reference tables for the appropirate keys
-        self.orig = viewing_data.copy()
-
-        a = time()
         # demographic_key
         temp = self.demographics.rename(index = str,
                                         columns = {'id':'demographic_key'})
@@ -720,12 +687,9 @@ class VizioImporter(object):
                                 temp,
                                 on = [ 'tms_id', 'program_name', 'program_start_time'],
                                 how = 'left')
-        print time() - a, 'MERGING KEYS'
 
         ### Expand viewing data and place appropirate timeslots
-        a = time()
         dat = self.extend_viewing_data(viewing_data)
-        print time() - a, 'VIEWING EXTENSION'
 
         # sometimes, these columns are interpreted as tuples
         for col in ['day_of_week', 'week']:
@@ -734,7 +698,6 @@ class VizioImporter(object):
             except IndexError:
                 continue
         ### End of Expand viewing data
-
 
         ### TIMES
         a = time()
@@ -754,7 +717,7 @@ class VizioImporter(object):
             start_idx = 1
             if len(self.times):
                 start_idx = int(self.times.id.max() + 1)
-            all_times['id'] = [start_idx + i for i in range(len(all_times))]
+            all_times['id'] = range(start_idx, start_idx + len(all_times))
             self.raw_insert(
                 self.Time,
                 all_times.filter(self.TimeCols)
@@ -767,10 +730,8 @@ class VizioImporter(object):
                 ignore_index = True
             )
         ### End of TIMES
-        print time() - a, 'TIMES'
 
         ### VIEWING
-        a = time()
         temp = self.times.rename(index = str,
                                     columns = {'id':'time_key'})
         dat = pd.merge(
@@ -779,12 +740,9 @@ class VizioImporter(object):
             on = ['time_slot', 'date'],
             how = 'left'
         )
-        dat['viewing_duration'] = [
-            x.seconds for x in (dat['viewing_end_time'] - dat['viewing_start_time'])
-        ]
-        dat['program_time_at_start'] = dat['program_time_at_start']
-        dat['id'] = [None for _ in range(len(dat))]
-
+        # dat['viewing_duration'] = [
+        #     x.seconds for x in (dat['viewing_end_time'] - dat['viewing_start_time'])
+        # ]
         dat = dat.where(pd.notnull(dat), None)
 
         self.raw_insert(
@@ -792,16 +750,11 @@ class VizioImporter(object):
             dat.filter(self.ViewingCols)
         )
         ### End of VIEWING
-        print time() - a, 'VIEWING'
 
-        self.dat = dat
-        self.viewing_data = viewing_data
-        a = time()
-        print 'got here already!', time() - aa
         for thread in self.threads:
             thread.join()
         self.clean_up_temp()
-        print time() - a
+
 ### INGNORE ###
 def testing():
     date_str = '2017-04-02'
@@ -819,7 +772,7 @@ def testing():
                 files.append(file_name)
         files.sort()
 
-        for file_name in files:
+        for file_name in files[:2]:
             print '##################### %s ###################'%file_name
             b = time()
             filepath = file_loc + file_name
@@ -828,11 +781,13 @@ def testing():
             if im.demographics.household_id.isnull().sum() + (im.demographics.household_id == '').sum() > 0:
                 im.demographics.to_csv('demo_problem_%s.csv'%file_name, index=False)
 ### INGNORE ###
-
 def import_historical(folder_names):
     #folder_name is in date string format - YYYY-MM-DD
     path = '/files2/Vizio/data/s3_download/vizio_unzipped/history/%s/'
+    time = pd.DataFrame()
     for date_str in folder_names:
+        import_time = []
+        g_start = time()
         file_loc = path%date_str
         year, month, day = [int(x) for x in date_str.split('-')]
         im = VizioImporter(year, month, day)
@@ -841,11 +796,17 @@ def import_historical(folder_names):
             if file_name.find('historical.content') != -1:
                 files.append(file_name)
         files.sort()
+        import_time.append(time() - g_start)
+
         for file_name in files:
+            start = time()
             print '##################### %s ###################'%file_name
             filepath = file_loc + file_name
             im.import_file(filepath)
+            import_time.append(time() - start)
 
+        time[date_str] = pd.Series(import_time)
+    time.to_csv('performance.csv')
 
 def main(year, month, day, filepath):
     importer = VizioImporter(year, month, day)
