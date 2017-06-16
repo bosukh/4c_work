@@ -5,6 +5,7 @@ import math
 import os
 import sys
 import threading
+from uuid import uuid4
 from datetime import datetime, date, timedelta
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
@@ -132,6 +133,7 @@ class VizioImporter(object):
         demographics = pd.DataFrame(demographics,
                                     columns = ['id',
                                                'household_id'])
+        demographics.id = demographics.id.astype(int)
         self.demographics = demographics
 
 
@@ -149,6 +151,7 @@ class VizioImporter(object):
                                   columns = ['id',
                                              'household_id',
                                              'last_active_date'])
+        activities.id = activities.id.astype(int)
         self.activities = activities
 
 
@@ -168,6 +171,7 @@ class VizioImporter(object):
                                  columns = ['id',
                                             'zipcode',
                                             'dma'])
+        locations.id = locations.id.astype(int)
         self.locations = locations
 
 
@@ -185,6 +189,7 @@ class VizioImporter(object):
         networks = pd.DataFrame(networks,
                                 columns = ['id',
                                            'call_sign'])
+        networks.id = networks.id.astype(int)
         self.networks = networks
 
 
@@ -206,6 +211,7 @@ class VizioImporter(object):
                                            'tms_id',
                                            'program_name',
                                            'program_start_time'])
+        programs.id = programs.id.astype(int)
         self.programs = programs
 
 
@@ -222,7 +228,12 @@ class VizioImporter(object):
                              columns = ['id',
                                         'time_slot',
                                         'date'])
+        times.id = times.id.astype(int)
         self.times = times
+
+    def clean_up_temp(self):
+        for file_name in os.listdir('./temp'):
+            os.remove('./temp/' + file_name)
 
     def raw_insert(self, table_obj, pd_df):
         t = threading.Thread(
@@ -242,23 +253,26 @@ class VizioImporter(object):
             return pd_df[columns]
         table_name = table_obj.__tablename__
         table_cols = [col.key for col in table_obj.__table__.c]
-        file_name = '%s_to_insert.csv'%table_name
+        file_name = './temp/%s_to_insert_%s'%(table_name, uuid4().hex)
         __put_placeholder(pd_df, table_cols).to_csv(file_name,
                                                     index = False,
                                                     header = False,
-                                                    sep = '^')
+                                                    sep = '^',
+                                                    na_rep = '\N')
+
         os.system(
             './vizio_data_import_script.sh {file_name} {table_name}'.format(file_name = file_name,
-                                                                    table_name = table_name)
+                                                                           table_name = table_name)
         )
 
     def raw_update_activity(self, pd_df):
-        pd_df.to_csv('activity_to_update',
+        pd_df.to_csv('./temp/activity_to_update',
                      index = False,
                      header = False,
-                     sep = '^')
+                     sep = '^',
+                     na_rep = '\N')
         os.system(
-            './vizio_activity_update_script.sh {file_name}'.format(file_name = 'activity_to_update')
+            './vizio_activity_update_script.sh {file_name}'.format(file_name = './temp/activity_to_update')
         )
 
     @__db_session
@@ -292,9 +306,10 @@ class VizioImporter(object):
         # Since Vizio data is reported hourly, only need to concern with
         # the rows that falls on 30 minutes
         for col in ['viewing_start_time', 'viewing_end_time']:
-            viewing_data[col + '_hour']   = [x.hour for x in viewing_data[col]]
-            viewing_data[col + '_minute'] = [x.minute for x in viewing_data[col]]
-            viewing_data[col + '_second'] = [x.second for x in viewing_data[col]]
+            temp = pd.DataFrame([[x.hour, x.minute, x.second] for x in viewing_data[col]], columns = ['hr', 'min', 'sec'])
+            viewing_data[col + '_hour']   = temp['hr'].copy()
+            viewing_data[col + '_minute'] = temp['min'].copy()
+            viewing_data[col + '_second'] = temp['sec'].copy()
         condition_1 = (
             (viewing_data.viewing_start_time_minute < 30) &
             (viewing_data.viewing_end_time_minute >= 30)
@@ -307,16 +322,16 @@ class VizioImporter(object):
         condition_3 = (condition_1 == False) & (condition_2 == False)
 
         extended_viewing_data = pd.DataFrame(columns = viewing_data.columns)
-        viewing_data['temp_end'] = viewing_data['viewing_start_time'].copy()
         extended_viewing_data = pd.concat(
             [extended_viewing_data,
              viewing_data[condition_3]],
             ignore_index=True
         )
 
+        viewing_data['temp_end'] = viewing_data['viewing_start_time'].copy()
         temp = viewing_data[condition_1].reset_index(drop = True).copy()
         temp['temp_end'] = (
-            temp.temp_end
+            temp.temp_end # it is now just a start time.
             + pd.Series([timedelta(minutes = (30 - x.minute))
                            - timedelta(seconds = x.second)
                            for x in temp.viewing_start_time])
@@ -325,6 +340,11 @@ class VizioImporter(object):
         temp['viewing_end_time'] = temp['temp_end']
         extended_viewing_data = pd.concat([extended_viewing_data, temp],
                                           ignore_index=True)
+
+        temp['program_time_at_start'] = temp['program_time_at_start']  + pd.Series([
+            x.seconds * 1000 for x in (temp['viewing_end_time']
+                                       - temp['viewing_start_time'])
+        ])
         temp['viewing_start_time'] = temp.viewing_end_time.copy()
         temp.viewing_end_time = actual_end_time
         extended_viewing_data = pd.concat([extended_viewing_data, temp],
@@ -416,6 +436,7 @@ class VizioImporter(object):
         insert_to_demo = update_activity.loc[
             update_activity.id.isin(self.demographics.id) == False
         ].copy()
+        #insert_to_demo = insert_to_demo.loc[insert_to_demo.id.isnull()==False,]
         # households to update in activity table
         update_activity = self.activities.loc[
             (self.activities.id.isin(update_activity.id)) & \
@@ -434,6 +455,7 @@ class VizioImporter(object):
             insert_to_activity_demo['id'] = [
                 start_idx + i for i in range(len(insert_to_activity_demo))
             ]
+            insert_to_activity_demo['id'] = insert_to_activity_demo['id'].astype(int)
             self.raw_insert(
                 self.Activity,
                 insert_to_activity_demo.filter(self.ActivityCols)
@@ -460,6 +482,9 @@ class VizioImporter(object):
         b = time()
         if len(insert_to_demo) > 0:
             # if household_id IS found in Activity_Dim table, but NOT in Demographic_Dim_{month}
+            insert_to_demo = insert_to_demo.reset_index(drop=True)
+            insert_to_demo.id = insert_to_demo.id.astype(int)
+            insert_to_demo = insert_to_demo.sort_values('id')
             self.raw_insert(
                 self.Demographic,
                 insert_to_demo[['id',
@@ -489,6 +514,38 @@ class VizioImporter(object):
         ### End of ACTIVITY & DEMOGRAPHICS
         print time() - aaa, 'ACTIVITY & DEMOGRAPHICS'
 
+        ################################################
+        # for thread in self.threads:
+        #     thread.join()
+        # def export_prob(idx):
+        #     self.in_activity_dim = in_activity_dim
+        #     self.insert_to_activity_demo = insert_to_activity_demo
+        #     self.update_activity = update_activity
+        #     self.insert_to_demo = insert_to_demo
+        #     self.all_demographics = all_demographics
+        #
+        #     in_activity_dim.to_csv('in_activity_dim%s.csv'%str(idx), index=False)
+        #     insert_to_activity_demo.to_csv('insert_to_activity_demo%s.csv'%str(idx), index=False)
+        #     update_activity.to_csv('update_activity%s.csv'%str(idx), index=False)
+        #     insert_to_demo.to_csv('insert_to_demo%s.csv'%str(idx), index=False)
+        #     all_demographics.to_csv('all_demographics%s.csv'%str(idx), index=False)
+        #     self.demographics.to_csv('demographics%s.csv'%str(idx), index=False)
+        # raise_error = 0
+        # if (self.demographics.household_id == '').sum() + self.demographics.household_id.isnull().sum():
+        #     export_prob(0)
+        #     raise_error = 1
+        # if self.demographics.id.isnull().sum():
+        #     export_prob(1)
+        #     raise_error = 1
+        # self.load_demographics()
+        # if (self.demographics.household_id == '').sum() + self.demographics.household_id.isnull().sum():
+        #     export_prob(2)
+        #     raise_error = 1
+        #
+        # if raise_error:
+        #     raise ValueError
+        # return
+        ################################################
 
         ### LOCATIONS
         aaa = time()
@@ -636,7 +693,7 @@ class VizioImporter(object):
                                 temp,
                                 on ='household_id',
                                 how = 'left')
-        if viewing_data.demographic_key.isnull().sum() + (viewing_data.demographic_key == '').sum():
+        if viewing_data.demographic_key.isnull().sum():
             viewing_data.to_csv('problem_found.csv', index = False)
             raise ValueError('Missing demographic_key')
 
@@ -743,6 +800,7 @@ class VizioImporter(object):
         print 'got here already!', time() - aa
         for thread in self.threads:
             thread.join()
+        self.clean_up_temp()
         print time() - a
 ### INGNORE ###
 def testing():
