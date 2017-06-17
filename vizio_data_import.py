@@ -1,6 +1,7 @@
 from config import Config
 from time import time
 import pandas as pd
+import numpy as np
 import math
 import os
 import sys
@@ -21,6 +22,10 @@ class VizioImporter(object):
     def __init__(self, year, month, day):
         # dynamic list of threads that will interact with different tables
         self.threads = []
+
+        # create temp folder to save files
+        if not os.path.isdir('./temp'):
+            os.mkdir('temp')
 
         # SQLalchemy initializtion
         self.config  = Config()
@@ -423,16 +428,33 @@ class VizioImporter(object):
             'viewing_start_time',
             'viewing_end_time'
         ]
-
-        viewing_data = pd.read_csv(filepath, names = columns)
+        dtypes = {
+            'household_id': np.str,
+            'zipcode':np.str,
+            'dma': np.str,
+            'tms_id': np.str,
+            'program_name': np.str,
+            'program_start_time': pd.datetime,
+            'call_sign': np.str,
+            'program_time_at_start': np.float,
+            'viewing_start_time': pd.datetime,
+            'viewing_end_time': pd.datetime
+        }
+        viewing_data = pd.read_csv(filepath,
+                                   names = columns,
+                                   header = None,
+                                   dtype = dtypes,
+                                   na_values = ['', 'null'])
+        #viewing_data = pd.read_csv(filepath, names = columns, na_values = ['', 'null'])
         viewing_data.zipcode = [
-            "{:05d}".format(int(x)) if pd.isnull(x) == False else x
+            "{:05d}".format(int(x)) if pd.isnull(x) == False else None
             for x in viewing_data.zipcode
         ]
         viewing_data.program_start_time = [
-            x[:-1].replace('T', ' ') if x != 'null' else None
+            x[:-1].replace('T', ' ') if pd.isnull(x) == False else None
             for x in viewing_data.program_start_time
         ]
+
         for col in ['program_start_time', 'viewing_start_time', 'viewing_end_time']:
             viewing_data[col] = pd.to_datetime(viewing_data[col])
         ### End of File Import
@@ -784,9 +806,9 @@ def testing():
 def import_historical(folder_names):
     #folder_name is in date string format - YYYY-MM-DD
     path = '/files2/Vizio/data/s3_download/vizio_unzipped/history/%s/'
-    time = pd.DataFrame()
+    timeit = pd.DataFrame()
     for date_str in folder_names:
-        import_time = []
+        time_lst = []
         g_start = time()
         file_loc = path%date_str
         year, month, day = [int(x) for x in date_str.split('-')]
@@ -796,17 +818,18 @@ def import_historical(folder_names):
             if file_name.find('historical.content') != -1:
                 files.append(file_name)
         files.sort()
-        import_time.append(time() - g_start)
+        time_lst.append(time() - g_start)
 
         for file_name in files:
             start = time()
             print '##################### %s ###################'%file_name
             filepath = file_loc + file_name
             im.import_file(filepath)
-            import_time.append(time() - start)
+            time_lst.append(time() - start)
 
-        time[date_str] = pd.Series(import_time)
-    time.to_csv('performance.csv')
+        timeit[date_str] = pd.Series(time_lst)
+        timeit.to_csv('performance.csv')
+    timeit.to_csv('performance.csv')
 
 def main(year, month, day, filepath):
     importer = VizioImporter(year, month, day)
