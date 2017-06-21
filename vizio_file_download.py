@@ -75,7 +75,7 @@ class VizioFileDownloader(object):
         if not os.path.isdir(file_path):
             os.mkdir(file_path)
 
-        for key in self.files_by_date[self.date_str][:10]:
+        for key in self.files_by_date[self.date_str]:
             print 'Downloading file: ', key.name
             _, file_name = os.path.split(key.name)
             dest_file_path = os.path.join(file_path, file_name)
