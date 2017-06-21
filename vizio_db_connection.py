@@ -327,6 +327,7 @@ class VizioDBConnection(object):
             )
             self.session.add(new_fileinfo)
         self.session.commit()
+        self.load_fileinfo()
     ######### End of Update fileinfo module #########
 
     ######### Utilities #########
