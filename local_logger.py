@@ -18,7 +18,8 @@ class Singleton(object):
 
 # Added on July 19, 2016: Base logger class
 class LocalBaseLogger(Singleton):
-    log_basedir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'logs')
+    #log_basedir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'logs')
+    log_basedir = os.path.join('/files2/Vizio', 'logs')
     date_suffix_fmt = '%Y_%m_%d'
 
     # Initialization Method

@@ -519,8 +519,8 @@ def testing():
             print time() - b, time() - a
             if im.demographics.household_id.isnull().sum() + (im.demographics.household_id == '').sum() > 0:
                 im.demographics.to_csv('demo_problem_%s.csv'%file_name, index=False)
-
 ### INGNORE ###
+
 def import_historical(folder_names):
     #folder_name is in date string format - YYYY-MM-DD
     path = '/files2/Vizio/data/s3_download/vizio_unzipped/history/%s/'
