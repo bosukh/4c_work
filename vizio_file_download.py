@@ -16,7 +16,7 @@ logger = LocalLogger(
 
 class VizioFileDownloader(object):
 
-    def __init__(self, DBconnection,  year, month, day,):
+    def __init__(self, DBconnection,  year, month, day):
         # Connection need to be VizioDBConnection
         logger.info('Initializing...')
         self.db_conn = DBconnection
@@ -50,14 +50,21 @@ class VizioFileDownloader(object):
         self.files_by_date = files_by_date
         self.no_date_files = no_date_files
         self.downloaded    = Queue()
+        self.files_available = True
+        if (self.files_by_date.get(self.date_str) is None
+                or len(self.files_by_date.get(self.date_str)) == 0):
+            logger.info('No files to donwload for date %s'%self.date_str)
+            print 'No files to donwload for date %s'%self.date_str
+            self.files_available = False
         logger.info('Initialization Complete')
 
     def refresh(self):
         self.__init__(self.db_conn)
 
-    def download(self, path = None, unzip = True, refresh=False):
+    def download(self, path = None, unzip = True, refresh = False, overwrite = False):
         # date_str has to be in YYYY-MM-DD
         # For now, download everything again even if there's something.
+
         if refresh is True:
             self.refresh()
 
@@ -72,8 +79,11 @@ class VizioFileDownloader(object):
             os.mkdir(os.path.join(path, self.date_str[:-3]))
 
         file_path = os.path.join(path, self.date_str[:-3], self.date_str)
+        self.file_path = file_path
         if not os.path.isdir(file_path):
             os.mkdir(file_path)
+        if not self.files_available:
+            return self.file_path
 
         for key in self.files_by_date[self.date_str]:
             print 'Downloading file: ', key.name
@@ -85,17 +95,23 @@ class VizioFileDownloader(object):
                     file_path = file_path
                 )
             )
+            if not overwrite and os.path.isfile(dest_file_path[:-3]):
+                continue
             try:
                 os.remove(dest_file_path[:-3])
                 os.remove(dest_file_path)
             except Exception as e:
                 pass
+                # When files don't exist
             key.get_contents_to_filename(dest_file_path)
             self.db_conn.update_fileinfo(os.path.splitext(file_name)[0],
                                          downloaded_date = datetime.now())
 
             if unzip is True:
-                os.system('gunzip ' + dest_file_path)
+                try:
+                    os.system('gunzip ' + dest_file_path)
+                except Exception as e:
+                    pass
+                    # When the file is not a zip file.
 
-        self.file_path = file_path
         return file_path
