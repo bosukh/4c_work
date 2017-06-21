@@ -11,3 +11,11 @@ class Config(object):
                 'database': 'vizio'
             }
         }
+
+        self.S3_CONNECTIONS = {
+            'vizio': {
+                'access_key': "",
+                'secret_key': "",
+                'bucket': ''
+            }
+        }
