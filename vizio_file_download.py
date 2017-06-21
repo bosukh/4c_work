@@ -1,7 +1,7 @@
 from config import Config
 import os
 import re
-from datetime import datetime
+from datetime import datetime, date
 from Queue import Queue
 from boto.s3.connection import S3Connection
 from local_logger import LocalLogger
@@ -16,9 +16,12 @@ logger = LocalLogger(
 
 class VizioFileDownloader(object):
 
-    def __init__(self, DBconnection):
+    def __init__(self, DBconnection,  year, month, day,):
         # Connection need to be VizioDBConnection
+        logger.info('Initializing...')
         self.db_conn = DBconnection
+        self.date_str = date(year, month, day).strftime('%Y-%m-%d')
+
 
         self.config  = Config()
         access_key = self.config.S3_CONNECTIONS['vizio']['access_key']
@@ -30,7 +33,7 @@ class VizioFileDownloader(object):
         filenames     = []
         files_by_date = {}
         no_date_files = []
-        for key in self.bucket.list():
+        for key in self.bucket.list(prefix='vizio/content/content/%s/'%self.date_str):
             name = key.name
             filenames.append(name)
             match = re.search("([0-9]{4}\-[0-9]{2}\-[0-9]{2})", name)
@@ -47,11 +50,12 @@ class VizioFileDownloader(object):
         self.files_by_date = files_by_date
         self.no_date_files = no_date_files
         self.downloaded    = Queue()
+        logger.info('Initialization Complete')
 
     def refresh(self):
         self.__init__(self.db_conn)
 
-    def download(self, year, month, day, path = None, unzip = True, refresh=False):
+    def download(self, path = None, unzip = True, refresh=False):
         # date_str has to be in YYYY-MM-DD
         # For now, download everything again even if there's something.
         if refresh is True:
@@ -64,14 +68,14 @@ class VizioFileDownloader(object):
         if path is None:
             path = '/files2/Vizio/data/s3_download/vizio_unzipped'
 
-        if not os.path.isdir(os.path.join(cwd, date_str[:-3])):
-            os.mkdir(os.path.join(cwd, date_str[:-3]))
+        if not os.path.isdir(os.path.join(path, self.date_str[:-3])):
+            os.mkdir(os.path.join(path, self.date_str[:-3]))
 
-        file_path = os.path.join(cwd, date_str[:-3], date_str)
+        file_path = os.path.join(path, self.date_str[:-3], self.date_str)
         if not os.path.isdir(file_path):
             os.mkdir(file_path)
 
-        for key in self.files_by_date[date_str]:
+        for key in self.files_by_date[self.date_str][:10]:
             print 'Downloading file: ', key.name
             _, file_name = os.path.split(key.name)
             dest_file_path = os.path.join(file_path, file_name)
@@ -82,12 +86,13 @@ class VizioFileDownloader(object):
                 )
             )
             try:
+                os.remove(dest_file_path[:-3])
                 os.remove(dest_file_path)
             except Exception as e:
                 pass
             key.get_contents_to_filename(dest_file_path)
-            self.db_conn.update_fileinfo(file_name,
-                                      downloaded_date = datetime.now())
+            self.db_conn.update_fileinfo(os.path.splitext(file_name)[0],
+                                         downloaded_date = datetime.now())
 
             if unzip is True:
                 os.system('gunzip ' + dest_file_path)
