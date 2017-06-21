@@ -2,7 +2,7 @@ from sqlalchemy.schema import ForeignKeyConstraint, UniqueConstraint
 from vizio_table_mixin import VizioViewingFactMixin, VizioDemographicDimMixin, \
                               VizioLocationDimMixin, VizioNetworkDimMixin, \
                               VizioProgramDimMixin, VizioTimeDimMixin, \
-                              VizioActivityDimMixin
+                              VizioActivityDimMixin, VizioFileInfoMixin
 
 
 def VizioViewingFact(Base, year, month, day):
@@ -109,3 +109,16 @@ def VizioTimeDim(Base):
     ## end of Class declaration
 
     return VizioTimeDimObj
+
+
+def VizioFileInfo(Base):
+
+    ## Class declaration
+    class VizioFileInfoObj(VizioFileInfoMixin, Base):
+        __tablename__ = 'vizio_fileinfo'
+        __table_args__ = (
+            UniqueConstraint('file_name', ),
+        )
+    ## end of Class declaration
+
+    return VizioFileInfoObj

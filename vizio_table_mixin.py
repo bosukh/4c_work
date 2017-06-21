@@ -38,7 +38,7 @@ class VizioNetworkDimMixin():
     id                    = Column(Integer, primary_key=True, autoincrement=True)
     call_sign             = Column(String(20), nullable=False)
     station_id            = Column(Integer, nullable=True) # tms
-    station_dma            = Column(String(128), nullable=True) # dma_name
+    station_dma           = Column(String(128), nullable=True) # dma_name
     station_name          = Column(String(250), nullable=True)
     network_affiliate     = Column(String(20), nullable=True)
 
@@ -61,3 +61,11 @@ class VizioTimeDimMixin():
     day_of_week           = Column(TINYINT, nullable=False)
     week                  = Column(TINYINT, nullable=False)
     quarter               = Column(TINYINT, nullable=False)
+
+class VizioFileInfoMixin():
+    id                    = Column(Integer, primary_key=True, autoincrement=True)
+    file_name             = Column(String(250), nullable=True)
+    data_date             = Column(DATE, nullable=False)
+    downloaded_date       = Column(DATETIME, nullable=True)
+    imported_date         = Column(DATETIME, nullable=True)
+    revised_date          = Column(DATETIME, nullable=True)
