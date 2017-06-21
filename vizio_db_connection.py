@@ -28,7 +28,11 @@ class VizioDBConnection(object):
 
         # SQLalchemy initializtion
         self.config  = Config()
-        self.engine  = create_engine("mysql+mysqldb://{user}:{password}@{host}:{port}/{database}".format(**self.config.CONNECTIONS['vizio']))
+        self.engine  = create_engine(
+            "mysql+mysqldb://{user}:{password}@{host}:{port}/{database}".format(
+                **self.config.CONNECTIONS['vizio']
+            )
+        )
         self.Session = sessionmaker(bind = self.engine)
         self.Base    = declarative_base()
 
@@ -251,9 +255,12 @@ class VizioDBConnection(object):
 
 
     @__db_session
-    def load_fileinfo(self):
+    def load_fileinfo(self, file_name = None):
         fileinfo = []
-        for row in self.session.query(self.FileInfo):
+        query = self.session.query(self.FileInfo)
+        if file_name:
+            query = query.filter_by(file_name = file_name)
+        for row in query:
             fileinfo.append([row.id,
                              row.file_name,
                              row.data_date,
@@ -269,6 +276,14 @@ class VizioDBConnection(object):
                                             'imported_date',
                                             'revised_date'])
         fileinfo.id = fileinfo.id.astype(int)
+        if file_name and len(self.fileinfo):
+            if len(self.fileinfo.loc[self.fileinfo.file_name == file_name]):
+                for col in fileinfo.columns:
+                    if col in self.fileinfo:
+                        self.fileinfo.loc[self.fileinfo.file_name == file_name, col] = fileinfo[col].values[0]
+                        fileinfo = self.fileinfo
+            else:
+                fileinfo = pd.concat([self.fileinfo, fileinfo])
         self.fileinfo = fileinfo
 
     ######### END of QUERIES  #########
@@ -287,7 +302,7 @@ class VizioDBConnection(object):
             return pd_df[columns]
         table_name = table_obj.__tablename__
         table_cols = [col.key for col in table_obj.__table__.c]
-        filepath = './temp/%s_to_insert'%table_name
+        filepath = './vizio_temp/%s_to_insert'%table_name
         unique_filepath = self.to_csv(__put_placeholder(pd_df, table_cols),
                                        filepath)
         os.system(
@@ -303,7 +318,7 @@ class VizioDBConnection(object):
 
 
     def raw_update_activity_func(self, pd_df):
-        unique_filepath = self.to_csv(pd_df, './temp/activity_to_update')
+        unique_filepath = self.to_csv(pd_df, './vizio_temp/activity_to_update')
         os.system(
             './vizio_activity_update_script.sh {file_name}'.format(
                 file_name = unique_filepath)
@@ -327,7 +342,8 @@ class VizioDBConnection(object):
             )
             self.session.add(new_fileinfo)
         self.session.commit()
-        self.load_fileinfo()
+        self.load_fileinfo(file_name = file_name)
+
     ######### End of Update fileinfo module #########
 
     ######### Utilities #########
@@ -365,9 +381,9 @@ class VizioDBConnection(object):
 
 
     def clean_up_temp(self):
-        for file_name in os.listdir('./temp'):
+        for file_name in os.listdir('./vizio_temp'):
             try:
-                os.remove('./temp/' + file_name)
+                os.remove('./vizio_temp/' + file_name)
             except Exception as e:
                 # most likely permission error, but wouldn't happen if run in home directory
                 pass
