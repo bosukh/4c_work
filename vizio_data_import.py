@@ -539,6 +539,10 @@ def import_historical(folder_names):
         time_lst.append(time() - g_start)
 
         for file_name in files:
+            current_fileinfo = im.fileinfo.loc[im.fileinfo.file_name == file_name]
+            if (len(current_fileinfo) > 0 and
+                    current_fileinfo['imported_date'].isnull().sum() == 0):
+                continue
             start = time()
             print '##################### %s ###################'%file_name
             filepath = file_loc + file_name
@@ -549,21 +553,26 @@ def import_historical(folder_names):
         timeit.to_csv('performance.csv')
     timeit.to_csv('performance.csv')
 
-def main(year, month, day, filepath):
+def main(year, month, day, file_path):
     importer = VizioImporter(year, month, day)
-    importer.import_file(filepath)
+    importer.import_file(file_path)
 
 if __name__ == '__main__':
     # Make sure to change config.py file.
-    testing()
-    if len(sys.argv) != 3:
+    # testing()
+    args = {}
+    for arg in sys.argv[1:]:
+        k, v = arg.split('=', 1)
+        args[k.strip()] = v.strip()
+    date_str = args.get('date')
+    file_path = args.get('file_path')
+
+    if date_str is None :
         hist = raw_input('Run historical data import module? (y/n)')
         if hist.lower() == 'y':
-            filepath = '/files2/Vizio/data/s3_download/vizio_unzipped/history'
-            if len(sys.argv) >= 2:
-                filepath = sys.argv[1]
+            file_path = '/files2/Vizio/data/s3_download/vizio_unzipped/history'
             folder_names = []
-            for folder_name in os.listdir(filepath):
+            for folder_name in os.listdir(file_path):
                 try:
                     datetime.strptime(folder_name, '%Y-%m-%d')
                     folder_names.append(folder_name)
@@ -572,12 +581,10 @@ if __name__ == '__main__':
             folder_names.sort()
             import_historical(folder_names)
         else:
-            print 'filepath and date string argument are required'
-    else:
-        filepath = sys.argv[1]
-        date_str = sys.argv[2]
+            print 'file_path and date string argument are required'
+    elif date_str and file_path:
         year, month, day = [int(x) for x in date_str.split('-')]
-        main(year, month, day, filepath)
+        main(year, month, day, file_path)
 
 
 #python data_import.py ./data/2017-05-17/historical.content.2017-05-17-07._0000_part_00 2017-05-17
